@@ -14,6 +14,8 @@ Installation :
                
 ## ✨ Features:
 - ✅ **Live domain scraping**
+- ✅ **Reverse IP to Domain**
+- ✅ **Reverse Domain to IP**
 - ✅ **CMS Filtering** (Laravel, WordPress, etc.)
 - ✅ **Auto-save results** to `Results.txt`
 - ✅ **Lightweight & User-friendly**
