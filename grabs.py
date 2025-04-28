@@ -52,7 +52,7 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
         page_queue.task_done()
         time.sleep(1)  # Respect Shodan's rate limit
 
-def reverse_ip_worker(api_key, ip_queue, result_list, lock):
+def shodan_reverse_ip_worker(api_key, ip_queue, shodan_results, rdns_queue, lock):
     api = shodan.Shodan(api_key)
     while True:
         try:
@@ -61,17 +61,34 @@ def reverse_ip_worker(api_key, ip_queue, result_list, lock):
             break
         if not is_ip(ip):
             continue
+        found = False
         try:
             result = api.host(ip)
             hostnames = result.get('hostnames', [])
             with lock:
                 for h in hostnames:
-                    # Add if it's not a plain IP, or if the IP is part of the hostname
-                    if not is_ip(h) or ip in h:
-                        result_list.append(h)
+                    if (not is_ip(h) or ip in h) and h:
+                        shodan_results.add(h)
+                        found = True
         except Exception:
-            pass  # Silently skip errors
+            pass
+        if not found:
+            rdns_queue.put(ip)
         time.sleep(1)  # Respect Shodan's rate limit
+
+def rdns_worker(rdns_queue, rdns_results, lock):
+    while True:
+        try:
+            ip = rdns_queue.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            rdns = socket.gethostbyaddr(ip)[0]
+            with lock:
+                if rdns:
+                    rdns_results.add(rdns)
+        except Exception:
+            pass
 
 def domain_to_ip_worker(domain_queue, result_list, lock):
     while True:
@@ -135,8 +152,7 @@ def grab_domains():
 
 def reverse_ip_to_domain():
     ip_file = input(f"{Fore.YELLOW}Enter the path to your IP list (e.g., ips.txt): {Style.RESET_ALL}").strip()
-    print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Thread count is set to 1 for compliance.{Style.RESET_ALL}")
-    num_threads = 1  # Force to 1 to avoid rate limit
+    print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Shodan lookups are single-threaded, but reverse DNS is parallelized for speed.{Style.RESET_ALL}")
 
     try:
         with open(ip_file, "r") as f:
@@ -154,29 +170,37 @@ def reverse_ip_to_domain():
     for ip in ips:
         ip_queue.put(ip)
 
-    result_list = []
+    shodan_results = set()
+    rdns_queue = queue.Queue()
+    rdns_results = set()
     lock = threading.Lock()
 
-    threads = []
-    for _ in range(num_threads):
-        t = threading.Thread(target=reverse_ip_worker, args=(SHODAN_API_KEY, ip_queue, result_list, lock))
-        t.start()
-        threads.append(t)
+    # Shodan lookups (single-threaded, rate-limited)
+    shodan_thread = threading.Thread(target=shodan_reverse_ip_worker, args=(SHODAN_API_KEY, ip_queue, shodan_results, rdns_queue, lock))
+    shodan_thread.start()
+    shodan_thread.join()
 
-    for t in threads:
+    # Reverse DNS lookups (multi-threaded)
+    rdns_threads = []
+    rdns_thread_count = 10  # You can adjust this for more/less parallelism
+    for _ in range(rdns_thread_count):
+        t = threading.Thread(target=rdns_worker, args=(rdns_queue, rdns_results, lock))
+        t.start()
+        rdns_threads.append(t)
+    for t in rdns_threads:
         t.join()
 
     result_dir = "ResultReverse"
     os.makedirs(result_dir, exist_ok=True)
     output_path = os.path.join(result_dir, "Reverse.txt")
 
-    unique_domains = sorted(set(result_list))
+    all_domains = sorted(set(list(shodan_results) + list(rdns_results)))
 
     with open(output_path, "w") as f:
-        for h in unique_domains:
+        for h in all_domains:
             print(h)
             f.write(h + "\n")
-    if unique_domains:
+    if all_domains:
         print(f"{Fore.LIGHTGREEN_EX}Saved reverse IP results to {output_path}{Style.RESET_ALL}")
     else:
         print(f"{Fore.YELLOW}No domains found for the provided IPs. Output file is empty.{Style.RESET_ALL}")
