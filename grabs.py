@@ -174,7 +174,9 @@ def reverse_ip_to_domain():
     os.makedirs(result_dir, exist_ok=True)
     output_path = os.path.join(result_dir, "Reverse.txt")
 
-    all_domains = sorted(shodan_results | rdns_results)
+    # Only keep results that are hostnames (not IPs)
+    all_domains = sorted({h for h in (shodan_results | rdns_results) if not is_ip(h)})
+
     with open(output_path, "w") as f:
         for h in all_domains:
             print(h)
@@ -182,7 +184,7 @@ def reverse_ip_to_domain():
     if all_domains:
         print(f"{Fore.LIGHTGREEN_EX}Saved reverse IP results to {output_path}{Style.RESET_ALL}")
     else:
-        print(f"{Fore.YELLOW}No domains found for the provided IPs. Output file is empty.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}No hostnames found for the provided IPs. Output file is empty.{Style.RESET_ALL}")
 
 def domain_to_ip():
     domain_file = input(f"{Fore.YELLOW}Enter the path to your domain list (e.g., domains.txt): {Style.RESET_ALL}").strip()
