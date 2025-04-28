@@ -52,44 +52,6 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
         page_queue.task_done()
         time.sleep(1)  # Respect Shodan's rate limit
 
-def shodan_reverse_ip_worker(api_key, ip_queue, shodan_results, rdns_queue, lock):
-    api = shodan.Shodan(api_key)
-    while True:
-        try:
-            ip = ip_queue.get_nowait()
-        except queue.Empty:
-            break
-        if not is_ip(ip):
-            continue
-        found = False
-        try:
-            result = api.host(ip)
-            hostnames = result.get('hostnames', [])
-            with lock:
-                for h in hostnames:
-                    if (not is_ip(h) or ip in h) and h:
-                        shodan_results.add(h)
-                        found = True
-        except Exception:
-            pass
-        if not found:
-            rdns_queue.put(ip)
-        time.sleep(1)  # Respect Shodan's rate limit
-
-def rdns_worker(rdns_queue, rdns_results, lock):
-    while True:
-        try:
-            ip = rdns_queue.get_nowait()
-        except queue.Empty:
-            break
-        try:
-            rdns = socket.gethostbyaddr(ip)[0]
-            with lock:
-                if rdns:
-                    rdns_results.add(rdns)
-        except Exception:
-            pass
-
 def domain_to_ip_worker(domain_queue, result_list, lock):
     while True:
         try:
@@ -166,36 +128,53 @@ def reverse_ip_to_domain():
         print(f"{Fore.RED}No valid IPv4 addresses found in your input file. Please provide a list of IP addresses.{Style.RESET_ALL}")
         return
 
-    ip_queue = queue.Queue()
-    for ip in ips:
-        ip_queue.put(ip)
-
     shodan_results = set()
-    rdns_queue = queue.Queue()
     rdns_results = set()
     lock = threading.Lock()
 
     # Shodan lookups (single-threaded, rate-limited)
-    shodan_thread = threading.Thread(target=shodan_reverse_ip_worker, args=(SHODAN_API_KEY, ip_queue, shodan_results, rdns_queue, lock))
-    shodan_thread.start()
-    shodan_thread.join()
+    api = shodan.Shodan(SHODAN_API_KEY)
+    for idx, ip in enumerate(ips, 1):
+        try:
+            result = api.host(ip)
+            hostnames = result.get('hostnames', [])
+            with lock:
+                for h in hostnames:
+                    if h and not is_ip(h):
+                        shodan_results.add(h)
+            print(f"{Fore.CYAN}[Shodan] {ip}: {hostnames if hostnames else 'No hostnames'} ({idx}/{len(ips)}){Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}[Shodan] {ip}: {e} ({idx}/{len(ips)}){Style.RESET_ALL}")
+        time.sleep(1)  # Respect Shodan's rate limit
 
     # Reverse DNS lookups (multi-threaded)
-    rdns_threads = []
-    rdns_thread_count = 10  # You can adjust this for more/less parallelism
-    for _ in range(rdns_thread_count):
-        t = threading.Thread(target=rdns_worker, args=(rdns_queue, rdns_results, lock))
+    def rdns_worker(ip_list):
+        for ip in ip_list:
+            try:
+                rdns = socket.gethostbyaddr(ip)[0]
+                with lock:
+                    if rdns and not is_ip(rdns):
+                        rdns_results.add(rdns)
+                print(f"{Fore.LIGHTGREEN_EX}[RDNS] {ip}: {rdns}{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.YELLOW}[RDNS] {ip}: No PTR record or error{Style.RESET_ALL}")
+
+    # Split IPs for threading
+    thread_count = 10
+    ip_chunks = [ips[i::thread_count] for i in range(thread_count)]
+    threads = []
+    for chunk in ip_chunks:
+        t = threading.Thread(target=rdns_worker, args=(chunk,))
         t.start()
-        rdns_threads.append(t)
-    for t in rdns_threads:
+        threads.append(t)
+    for t in threads:
         t.join()
 
     result_dir = "ResultReverse"
     os.makedirs(result_dir, exist_ok=True)
     output_path = os.path.join(result_dir, "Reverse.txt")
 
-    all_domains = sorted(set(list(shodan_results) + list(rdns_results)))
-
+    all_domains = sorted(shodan_results | rdns_results)
     with open(output_path, "w") as f:
         for h in all_domains:
             print(h)
