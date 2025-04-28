@@ -1,8 +1,5 @@
 # Laravel Grabber V1 
 
-# This Script is free to download and has no virus and everything
-# Fully created and modified by AI
-
 Installation : 
 ------
          
@@ -15,10 +12,17 @@ Installation :
    
                python grabs.py
                
+## ✨ Features:
+- ✅ **Live domain scraping**
+- ✅ **CMS Filtering** (Laravel, WordPress, etc.)
+- ✅ **Auto-save results** to `Results.txt`
+- ✅ **Lightweight & User-friendly**
+- ✅ **Works with Windows & Mac** (Standalone executables)
+- ✅ **No installation required** – Just **download & run!**
 
 📧 Contact :
 ------
-You Want Ask About All My Tools Or Buy Tools/Exploits Private Add Me On : 
+You Want Ask About All My Tools Private Add Me On : 
 ```
 [+] Telegram : @marleyybob123 
 ```
