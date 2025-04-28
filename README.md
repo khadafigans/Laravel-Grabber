@@ -35,4 +35,6 @@ You Want Ask About All My Tools Private Add Me On :
 *Make sure you have shodan.io API key before using the script
 Thank you
 
+           This script was made for an educational purposes only, any illegal activites will have nothing to do with me
+
 <br>©2025 Bob Marley
