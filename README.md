@@ -28,8 +28,6 @@ You Want Ask About All My Tools Private Add Me On :
 ```
 [+] Telegram : @marleyybob123 
 ```
-
-# Contact me at telegram @marleyybob123 for further questions
 # This script is public and not for sale!
 
 *Make sure you have shodan.io API key before using the script
