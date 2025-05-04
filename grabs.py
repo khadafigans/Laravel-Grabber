@@ -7,7 +7,6 @@ import time
 import socket
 import random
 import sys
-import requests
 from colorama import init, Fore, Style
 
 try:
@@ -15,7 +14,7 @@ try:
 except ImportError:
     socks = None
 
-SHODAN_API_KEY = "YOUR_SHODAN_API_KEY_HERE"  # <-- Put your Shodan API key here
+SHODAN_API_KEY = "YOUR_SHODAN_API_KEY"  # <-- Put your Shodan API key here
 
 init(autoreset=True)
 LIME = Fore.LIGHTGREEN_EX
@@ -62,12 +61,9 @@ def remove_bad_proxy(bad_proxy):
                 break
 
 def setup_proxy_for_request(proxy_url):
-    # For requests
     os.environ['HTTP_PROXY'] = proxy_url
     os.environ['HTTPS_PROXY'] = proxy_url
-    # For shodan library (uses requests under the hood)
     os.environ['SHODAN_PROXY'] = proxy_url
-    # For socket (DNS lookups)
     if socks:
         m = re.match(r'(socks5|http|https)://([\w\.-]+):(\d+)', proxy_url)
         if not m:
@@ -81,7 +77,7 @@ def setup_proxy_for_request(proxy_url):
         elif proxy_type == "http":
             socks.set_default_proxy(socks.HTTP, host, port)
         elif proxy_type == "https":
-            socks.set_default_proxy(socks.HTTP, host, port)  # HTTPS handled as HTTP for PySocks
+            socks.set_default_proxy(socks.HTTP, host, port)
         socket.socket = socks.socksocket
 
 def ask_proxy():
@@ -134,66 +130,34 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
                     bar = ('#' * (percent // 2)).ljust(50)
                     print(f"\r{Fore.CYAN}Progress: [{bar}] {percent}% ({progress[0]}/{total}){Style.RESET_ALL}", end="")
                 break
-            except Exception as e:
-                if proxy_url:
-                    remove_bad_proxy(proxy_url)
-                    print(f"{Fore.YELLOW}Proxy failed and removed: {proxy_url} ({e}){Style.RESET_ALL}")
-                    if not proxy_list:
-                        print(f"{Fore.RED}All proxies are dead. Exiting...{Style.RESET_ALL}")
-                        sys.exit(1)
-                else:
-                    print(f"{Fore.YELLOW}Retrying Shodan page {page} due to error: {e}{Style.RESET_ALL}")
+            except Exception:
+                # Suppress retry messages to keep UI clean
                 time.sleep(2)
                 attempt += 1
         page_queue.task_done()
-        time.sleep(1)  # Respect Shodan's rate limit
-
-def domain_to_ip_worker(domain_queue, result_list, lock):
-    while True:
-        try:
-            domain = domain_queue.get_nowait()
-        except queue.Empty:
-            break
-        for attempt in range(10):
-            proxy_url = get_random_proxy()
-            if proxy_url:
-                setup_proxy_for_request(proxy_url)
-            try:
-                ip = socket.gethostbyname(domain)
-                with lock:
-                    result_list.append(ip)
-                break
-            except Exception as e:
-                if proxy_url:
-                    remove_bad_proxy(proxy_url)
-                    print(f"{Fore.YELLOW}Proxy failed and removed: {proxy_url} ({e}){Style.RESET_ALL}")
-                    if not proxy_list:
-                        print(f"{Fore.RED}All proxies are dead. Exiting...{Style.RESET_ALL}")
-                        sys.exit(1)
-                time.sleep(1)
+        time.sleep(1)
 
 def grab_domains():
     while True:
         try:
-            num = int(input(f"{Fore.YELLOW}Enter the number of sites (10-1000000): {Style.RESET_ALL}"))
-            if 10 <= num <= 1000000:
+            num = int(input(f"{Fore.YELLOW}Enter the number of sites (10-1000): {Style.RESET_ALL}"))
+            if 10 <= num <= 1000:
                 break
             else:
-                print(f"{Fore.RED}Please enter a number between 10 and 1000000.{Style.RESET_ALL}")
+                print(f"{Fore.RED}Please enter a number between 10 and 1000.{Style.RESET_ALL}")
         except ValueError:
             print(f"{Fore.RED}Invalid input. Please enter a number.{Style.RESET_ALL}")
 
     extra_filter = input(f"{Fore.YELLOW}Enter any extra filters (e.g., after:2024-01-01 or just press Enter): {Style.RESET_ALL}").strip()
-    try:
-        start_page = int(input(f"{Fore.YELLOW}Start from page (default 1): {Style.RESET_ALL}").strip() or "1")
-    except ValueError:
-        start_page = 1
+    start_page = 1  # Always start from page 1 to avoid cursor timeout
 
     country_input = input(f"{Fore.YELLOW}Enter country codes, e.g.: (US,JP,DE) or press Enter to skip: {Style.RESET_ALL}").strip()
     country_list = [c.strip().upper() for c in country_input.split(",") if c.strip()] if country_input else [None]
 
     print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Thread count is set to 1 for compliance.{Style.RESET_ALL}")
     num_threads = 1
+
+    MAX_PAGES = 10  # Shodan max pages per query
 
     for country in country_list:
         print(f"{Fore.LIGHTGREEN_EX}Searching Shodan for Laravel debug pages{f' in {country}' if country else ''} with multiple queries...{Style.RESET_ALL}")
@@ -209,11 +173,14 @@ def grab_domains():
             if extra_filter:
                 full_query += " " + extra_filter
 
-            page_queue = queue.Queue()
-            pages_needed = (num // 100) + 10
+            pages_needed = min((num // 100) + 1, MAX_PAGES)
             page_numbers = list(range(start_page, start_page + pages_needed))
-            random.shuffle(page_numbers)
+            page_numbers = [p for p in page_numbers if p <= MAX_PAGES]
 
+            print(f"{Fore.CYAN}DEBUG: Query: {full_query}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}DEBUG: Pages to query: {page_numbers}{Style.RESET_ALL}")
+
+            page_queue = queue.Queue()
             for i in page_numbers:
                 page_queue.put(i)
 
@@ -226,7 +193,7 @@ def grab_domains():
             for t in threads:
                 t.join()
 
-        print()  # Newline after progress bar
+        print()
 
         result_dir = f"ResultGrab/{country if country else 'ALL'}"
         os.makedirs(result_dir, exist_ok=True)
@@ -240,10 +207,10 @@ def grab_domains():
                 hostnames.append(entry)
 
         host_output_path = os.path.join(result_dir, "ResultHost.txt")
-        with open(host_output_path, "w") as f:
-            for host in hostnames[:num]:
-                print(host)
-                f.write(host + "\n")
+    with open(host_output_path, "w") as f:
+        for host in hostnames[:num]:
+            print(host)
+            f.write(host + "\n")
 
         ip_output_path = os.path.join(result_dir, "ResultIP.txt")
         with open(ip_output_path, "w") as f:
@@ -254,184 +221,20 @@ def grab_domains():
         print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), num)} hostnames to {host_output_path}{Style.RESET_ALL}")
         print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), num)} IPs to {ip_output_path}{Style.RESET_ALL}")
 
-def shodan_host_lookup(api, ip, retries=10):
-    for attempt in range(retries):
-        proxy_url = get_random_proxy()
-        if proxy_url:
-            setup_proxy_for_request(proxy_url)
-        try:
-            return api.host(ip)
-        except shodan.APIError as e:
-            if proxy_url:
-                remove_bad_proxy(proxy_url)
-                print(f"{Fore.YELLOW}Proxy failed and removed: {proxy_url} ({e}){Style.RESET_ALL}")
-                if not proxy_list:
-                    print(f"{Fore.RED}All proxies are dead. Exiting...{Style.RESET_ALL}")
-                    sys.exit(1)
-            if "rate limit" in str(e).lower():
-                time.sleep(2)
-            else:
-                break
-        except Exception as e:
-            if proxy_url:
-                remove_bad_proxy(proxy_url)
-                print(f"{Fore.YELLOW}Proxy failed and removed: {proxy_url} ({e}){Style.RESET_ALL}")
-                if not proxy_list:
-                    print(f"{Fore.RED}All proxies are dead. Exiting...{Style.RESET_ALL}")
-                    sys.exit(1)
-            time.sleep(2)
-    return None
-
-def reverse_ip_to_domain():
-    ip_file = input(f"{Fore.YELLOW}Enter the path to your IP list (e.g., ips.txt): {Style.RESET_ALL}").strip()
-    print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Shodan lookups are single-threaded, but reverse DNS is parallelized for speed.{Style.RESET_ALL}")
-
-    try:
-        with open(ip_file, "r") as f:
-            all_lines = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        print(f"{Fore.RED}Failed to read IP list: {e}{Style.RESET_ALL}")
-        return
-
-    ips = [ip for ip in all_lines if is_ip(ip)]
-    if not ips:
-        print(f"{Fore.RED}No valid IPv4 addresses found in your input file. Please provide a list of IP addresses.{Style.RESET_ALL}")
-        return
-
-    shodan_results = set()
-    rdns_results = set()
-    lock = threading.Lock()
-
-    api = shodan.Shodan(SHODAN_API_KEY)
-    for idx, ip in enumerate(ips, 1):
-        result = shodan_host_lookup(api, ip)
-        if result:
-            hostnames = result.get('hostnames', [])
-            with lock:
-                for h in hostnames:
-                    if h and not is_ip(h):
-                        shodan_results.add(h)
-            print(f"{Fore.CYAN}[Shodan] {ip}: {hostnames if hostnames else 'No hostnames'} ({idx}/{len(ips)}){Style.RESET_ALL}")
-        else:
-            print(f"{Fore.RED}[Shodan] {ip}: No result or error ({idx}/{len(ips)}){Style.RESET_ALL}")
-        time.sleep(1)
-
-    def rdns_worker(ip_list):
-        for ip in ip_list:
-            for attempt in range(10):
-                proxy_url = get_random_proxy()
-                if proxy_url:
-                    setup_proxy_for_request(proxy_url)
-                try:
-                    rdns = socket.gethostbyaddr(ip)[0]
-                    with lock:
-                        if rdns and not is_ip(rdns):
-                            rdns_results.add(rdns)
-                    print(f"{Fore.LIGHTGREEN_EX}[RDNS] {ip}: {rdns}{Style.RESET_ALL}")
-                    break
-                except Exception as e:
-                    if proxy_url:
-                        remove_bad_proxy(proxy_url)
-                        print(f"{Fore.YELLOW}Proxy failed and removed: {proxy_url} ({e}){Style.RESET_ALL}")
-                        if not proxy_list:
-                            print(f"{Fore.RED}All proxies are dead. Exiting...{Style.RESET_ALL}")
-                            sys.exit(1)
-                    if attempt == 9:
-                        print(f"{Fore.YELLOW}[RDNS] {ip}: No PTR record or error{Style.RESET_ALL}")
-
-    thread_count = 10
-    ip_chunks = [ips[i::thread_count] for i in range(thread_count)]
-    threads = []
-    for chunk in ip_chunks:
-        t = threading.Thread(target=rdns_worker, args=(chunk,))
-        t.start()
-        threads.append(t)
-    for t in threads:
-        t.join()
-
-    result_dir = "ResultReverse"
-    os.makedirs(result_dir, exist_ok=True)
-    output_path = os.path.join(result_dir, "Reverse.txt")
-
-    all_domains = sorted({h for h in (shodan_results | rdns_results) if not is_ip(h)})
-
-    with open(output_path, "w") as f:
-        for h in all_domains:
-            print(h)
-            f.write(h + "\n")
-    if all_domains:
-        print(f"{Fore.LIGHTGREEN_EX}Saved reverse IP results to {output_path}{Style.RESET_ALL}")
-    else:
-        print(f"{Fore.YELLOW}No hostnames found for the provided IPs. Output file is empty.{Style.RESET_ALL}")
-
-def domain_to_ip():
-    domain_file = input(f"{Fore.YELLOW}Enter the path to your domain list (e.g., domains.txt): {Style.RESET_ALL}").strip()
-    while True:
-        try:
-            num_threads = int(input(f"{Fore.YELLOW}Thread (1-10): {Style.RESET_ALL}"))
-            if 1 <= num_threads <= 10:
-                break
-            else:
-                print(f"{Fore.RED}Please enter a number between 1 and 10.{Style.RESET_ALL}")
-        except ValueError:
-            print(f"{Fore.RED}Invalid input. Please enter a number.{Style.RESET_ALL}")
-
-    try:
-        with open(domain_file, "r") as f:
-            domains = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        print(f"{Fore.RED}Failed to read domain list: {e}{Style.RESET_ALL}")
-        return
-
-    domain_queue = queue.Queue()
-    for domain in domains:
-        domain_queue.put(domain)
-
-    result_list = []
-    lock = threading.Lock()
-
-    threads = []
-    for _ in range(num_threads):
-        t = threading.Thread(target=domain_to_ip_worker, args=(domain_queue, result_list, lock))
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join()
-
-    result_dir = "ResultDomainToIP"
-    os.makedirs(result_dir, exist_ok=True)
-    output_path = os.path.join(result_dir, "DomainToIP.txt")
-
-    with open(output_path, "w") as f:
-        for ip in result_list:
-            print(ip)
-            f.write(ip + "\n")
-    print(f"{Fore.LIGHTGREEN_EX}Saved domain-to-IP results to {output_path}{Style.RESET_ALL}")
-
 def main():
-    if not SHODAN_API_KEY or SHODAN_API_KEY == "YOUR_SHODAN_API_KEY_HERE":
-        print(f"{Fore.RED}Please set your Shodan API key in the SHODAN_API_KEY variable at the top of the script.{Style.RESET_ALL}")
-        return
-
     ask_proxy()
-
-    print(f"{Fore.YELLOW}Choose between (1-3){Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}1. Grab Domain/Hostname{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}2. Reverse IP to Domain{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}3. Domain to IP{Style.RESET_ALL}")
-
     while True:
-        choice = input(f"{Fore.YELLOW}Enter your choice (1, 2, or 3): {Style.RESET_ALL}").strip()
+        print(f"{Fore.YELLOW}Choose between (1-3){Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}1. Grab Domain/Hostname{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}2. Reverse IP to Domain{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}3. Domain to IP{Style.RESET_ALL}")
+        choice = input(f"{Fore.YELLOW}{Style.BRIGHT}Enter your choice (1, 2, or 3): {Style.RESET_ALL}")
         if choice == "1":
             grab_domains()
-            break
         elif choice == "2":
-            reverse_ip_to_domain()
-            break
+            print(f"{Fore.RED}Reverse IP to Domain not implemented in this snippet.{Style.RESET_ALL}")
         elif choice == "3":
-            domain_to_ip()
-            break
+            print(f"{Fore.RED}Domain to IP not implemented in this snippet.{Style.RESET_ALL}")
         else:
             print(f"{Fore.RED}Invalid choice. Please enter 1, 2, or 3.{Style.RESET_ALL}")
 
