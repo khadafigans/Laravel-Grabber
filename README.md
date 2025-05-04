@@ -14,6 +14,7 @@ Installation :
                
 ## ✨ Features:
 - ✅ **Live domain scraping**
+- ✅ **Grab Hostname and IP**(The output files will be ResultHost.txt and ResultIP.txt divided each for easy use)
 - ✅ **Reverse IP to Domain**
 - ✅ **Reverse Domain to IP**
 - ✅ **CMS Filtering** (Laravel, WordPress, etc.)
