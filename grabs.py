@@ -7,6 +7,7 @@ import time
 import socket
 import random
 import sys
+import datetime
 from colorama import init, Fore, Style
 
 try:
@@ -101,6 +102,17 @@ def ask_proxy():
     else:
         print(f"{Fore.LIGHTGREEN_EX}Proxy not used.{Style.RESET_ALL}")
 
+def generate_date_ranges(start_date, end_date, delta_days=30):
+    ranges = []
+    current_start = start_date
+    while current_start < end_date:
+        current_end = current_start + datetime.timedelta(days=delta_days)
+        if current_end > end_date:
+            current_end = end_date
+        ranges.append((current_start.strftime("%Y-%m-%d"), current_end.strftime("%Y-%m-%d")))
+        current_start = current_end + datetime.timedelta(days=1)
+    return ranges
+
 def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, progress):
     while True:
         try:
@@ -138,62 +150,81 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
         time.sleep(1)
 
 def grab_domains():
+    import math
+
     while True:
         try:
-            num = int(input(f"{Fore.YELLOW}Enter the number of sites (10-1000): {Style.RESET_ALL}"))
-            if 10 <= num <= 1000:
+            total_num = int(input(f"{Fore.YELLOW}Enter the total number of sites to grab (10-1000000): {Style.RESET_ALL}"))
+            if 10 <= total_num <= 1000000:
                 break
             else:
-                print(f"{Fore.RED}Please enter a number between 10 and 1000.{Style.RESET_ALL}")
+                print(f"{Fore.RED}Please enter a number between 10 and 1,000,000.{Style.RESET_ALL}")
         except ValueError:
             print(f"{Fore.RED}Invalid input. Please enter a number.{Style.RESET_ALL}")
 
-    extra_filter = input(f"{Fore.YELLOW}Enter any extra filters (e.g., after:2024-01-01 or just press Enter): {Style.RESET_ALL}").strip()
-    start_page = 1  # Always start from page 1 to avoid cursor timeout
+    extra_filter = input(f"{Fore.YELLOW}Enter any extra filters (e.g., country:US) or press Enter to skip: {Style.RESET_ALL}").strip()
 
-    country_input = input(f"{Fore.YELLOW}Enter country codes, e.g.: (US,JP,DE) or press Enter to skip: {Style.RESET_ALL}").strip()
+    # Define date range for splitting queries (last 3 years)
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=365*3)  # 3 years ago
+
+    date_ranges = generate_date_ranges(start_date, end_date, delta_days=30)  # monthly ranges
+
+    country_input = input(f"{Fore.YELLOW}Enter country codes separated by commas (e.g., US,JP,DE) or press Enter to skip: {Style.RESET_ALL}").strip()
     country_list = [c.strip().upper() for c in country_input.split(",") if c.strip()] if country_input else [None]
 
-    print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Thread count is set to 1 for compliance.{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}Shodan API allows 1 request per second. Thread count set to 1 for compliance.{Style.RESET_ALL}")
     num_threads = 1
 
-    MAX_PAGES = 10  # Shodan max pages per query
+    MAX_PAGES = 10  # max pages per query (1000 results)
+
+    result_set = set()
+    lock = threading.Lock()
+    progress = [0]
 
     for country in country_list:
-        print(f"{Fore.LIGHTGREEN_EX}Searching Shodan for Laravel debug pages{f' in {country}' if country else ''} with multiple queries...{Style.RESET_ALL}")
+        print(f"{Fore.LIGHTGREEN_EX}Starting search for Laravel debug pages{f' in {country}' if country else ''}...{Style.RESET_ALL}")
 
-        result_set = set()
-        lock = threading.Lock()
-        progress = [0]
+        for date_start, date_end in date_ranges:
+            if len(result_set) >= total_num:
+                break  # reached desired total
 
-        for query in LARAVEL_QUERIES:
-            full_query = query
-            if country:
-                full_query += f" country:{country}"
-            if extra_filter:
-                full_query += " " + extra_filter
+            for query_base in LARAVEL_QUERIES:
+                if len(result_set) >= total_num:
+                    break
 
-            pages_needed = min((num // 100) + 1, MAX_PAGES)
-            page_numbers = list(range(start_page, start_page + pages_needed))
-            page_numbers = [p for p in page_numbers if p <= MAX_PAGES]
+                # Build query with date range and optional country and extra filters
+                query = f'{query_base} after:{date_start} before:{date_end}'
+                if country:
+                    query += f' country:{country}'
+                if extra_filter:
+                    query += f' {extra_filter}'
 
-            print(f"{Fore.CYAN}DEBUG: Query: {full_query}{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}DEBUG: Pages to query: {page_numbers}{Style.RESET_ALL}")
+                pages_needed = math.ceil((total_num - len(result_set)) / 100)
+                pages_needed = min(pages_needed, MAX_PAGES)
 
-            page_queue = queue.Queue()
-            for i in page_numbers:
-                page_queue.put(i)
+                page_numbers = list(range(1, pages_needed + 1))
 
-            threads = []
-            for _ in range(num_threads):
-                t = threading.Thread(target=shodan_search_worker, args=(SHODAN_API_KEY, full_query, page_queue, result_set, lock, num, progress))
-                t.start()
-                threads.append(t)
+                print(f"{Fore.CYAN}DEBUG: Query: {query}{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}DEBUG: Pages to query: {page_numbers}{Style.RESET_ALL}")
 
-            for t in threads:
-                t.join()
+                page_queue = queue.Queue()
+                for p in page_numbers:
+                    page_queue.put(p)
 
-        print()
+                threads =                threads = []
+                for _ in range(num_threads):
+                    t = threading.Thread(target=shodan_search_worker, args=(SHODAN_API_KEY, query, page_queue, result_set, lock, total_num, progress))
+                    t.start()
+                    threads.append(t)
+
+                for t in threads:
+                    t.join()
+
+                if len(result_set) >= total_num:
+                    break
+
+        print(f"\n{Fore.LIGHTGREEN_EX}Search complete for {country if country else 'ALL'}. Total results collected: {len(result_set)}{Style.RESET_ALL}")
 
         result_dir = f"ResultGrab/{country if country else 'ALL'}"
         os.makedirs(result_dir, exist_ok=True)
@@ -207,34 +238,34 @@ def grab_domains():
                 hostnames.append(entry)
 
         host_output_path = os.path.join(result_dir, "ResultHost.txt")
-    with open(host_output_path, "w") as f:
-        for host in hostnames[:num]:
-            print(host)
-            f.write(host + "\n")
+        with open(host_output_path, "w") as f:
+            for host in hostnames[:total_num]:
+                print(host)
+                f.write(host + "\n")
 
         ip_output_path = os.path.join(result_dir, "ResultIP.txt")
         with open(ip_output_path, "w") as f:
-            for ip in ips[:num]:
+            for ip in ips[:total_num]:
                 print(ip)
                 f.write(ip + "\n")
 
-        print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), num)} hostnames to {host_output_path}{Style.RESET_ALL}")
-        print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), num)} IPs to {ip_output_path}{Style.RESET_ALL}")
+        print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), total_num)} hostnames to {host_output_path}{Style.RESET_ALL}")
+        print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), total_num)} IPs to {ip_output_path}{Style.RESET_ALL}")
 
 def main():
     ask_proxy()
     while True:
         print(f"{Fore.YELLOW}Choose between (1-3){Style.RESET_ALL}")
         print(f"{Fore.YELLOW}1. Grab Domain/Hostname{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}2. Reverse IP to Domain{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}3. Domain to IP{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}2. Reverse IP to Domain (Not implemented){Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}3. Domain to IP (Not implemented){Style.RESET_ALL}")
         choice = input(f"{Fore.YELLOW}{Style.BRIGHT}Enter your choice (1, 2, or 3): {Style.RESET_ALL}")
         if choice == "1":
             grab_domains()
         elif choice == "2":
-            print(f"{Fore.RED}Reverse IP to Domain not implemented in this snippet.{Style.RESET_ALL}")
+            print(f"{Fore.RED}Reverse IP to Domain not implemented.{Style.RESET_ALL}")
         elif choice == "3":
-            print(f"{Fore.RED}Domain to IP not implemented in this snippet.{Style.RESET_ALL}")
+            print(f"{Fore.RED}Domain to IP not implemented.{Style.RESET_ALL}")
         else:
             print(f"{Fore.RED}Invalid choice. Please enter 1, 2, or 3.{Style.RESET_ALL}")
 
