@@ -21,12 +21,19 @@ banner = f"""{LIME}{Style.BRIGHT}
 {Style.RESET_ALL}"""
 print(banner)
 
-print(f"{LIME}{Style.BRIGHT}How To Use:")
-print(f"{LIME}{Style.BRIGHT}1. Put your Shodan API key in the SHODAN_API_KEY variable at the top of the script.")
-print(f"{LIME}{Style.BRIGHT}2. Run the script and follow the prompts.\n{Style.RESET_ALL}")
-
 def is_ip(address):
     return re.match(r"^\d{1,3}(\.\d{1,3}){3}$", address) is not None
+
+# Broader set of queries to catch more Laravel debug/error pages
+LARAVEL_QUERIES = [
+    'http.title:"Whoops! There was an error."',
+    'http.html:"Whoops, looks like something went wrong."',
+    'http.html:"Laravel Framework"',
+    'http.html:"Whoops\\Exception\\ErrorException"',
+    'http.html:"Whoops\\Run"',
+    'http.html:"laravel.log"',
+    'http.html:"laravel"'
+]
 
 def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, progress):
     api = shodan.Shodan(api_key)
@@ -40,9 +47,14 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
             with lock:
                 for match in results['matches']:
                     hostnames = match.get('hostnames', [])
-                    for hostname in hostnames:
-                        if not is_ip(hostname) and len(result_set) < total:
-                            result_set.add(hostname)
+                    ip = match.get('ip_str', None)
+                    # Add hostnames if present, else add IP
+                    if hostnames:
+                        for hostname in hostnames:
+                            if not is_ip(hostname):
+                                result_set.add(hostname)
+                    elif ip:
+                        result_set.add(ip)
                 progress[0] = len(result_set)
                 percent = int((progress[0] / total) * 100)
                 bar = ('#' * (percent // 2)).ljust(50)
@@ -79,38 +91,59 @@ def grab_domains():
     print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Thread count is set to 1 for compliance.{Style.RESET_ALL}")
     num_threads = 1  # Force to 1 to avoid rate limit
 
-    query = 'http.title:"Whoops! There was an error."'
-    print(f"{Fore.LIGHTGREEN_EX}Searching Shodan for Laravel debug pages...{Style.RESET_ALL}")
+    print(f"{Fore.LIGHTGREEN_EX}Searching Shodan for Laravel debug pages with multiple queries...{Style.RESET_ALL}")
 
     result_set = set()
     lock = threading.Lock()
     progress = [0]
 
-    page_queue = queue.Queue()
-    pages_needed = (num // 100) + 5
-    for i in range(1, pages_needed + 1):
-        page_queue.put(i)
+    # For each query, fetch enough pages to try to reach the target
+    for query in LARAVEL_QUERIES:
+        page_queue = queue.Queue()
+        # Fetch more pages per query to maximize coverage
+        pages_needed = (num // 100) + 10
+        for i in range(1, pages_needed + 1):
+            page_queue.put(i)
 
-    threads = []
-    for _ in range(num_threads):
-        t = threading.Thread(target=shodan_search_worker, args=(SHODAN_API_KEY, query, page_queue, result_set, lock, num, progress))
-        t.start()
-        threads.append(t)
+        threads = []
+        for _ in range(num_threads):
+            t = threading.Thread(target=shodan_search_worker, args=(SHODAN_API_KEY, query, page_queue, result_set, lock, num, progress))
+            t.start()
+            threads.append(t)
 
-    for t in threads:
-        t.join()
+        for t in threads:
+            t.join()
 
     print()  # Newline after progress bar
 
     result_dir = "ResultGrab"
     os.makedirs(result_dir, exist_ok=True)
-    output_path = os.path.join(result_dir, "Results.txt")
 
-    with open(output_path, "w") as f:
-        for site in list(result_set)[:num]:
-            print(site)
-            f.write(site + "\n")
-    print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(result_set), num)} domains to {output_path}{Style.RESET_ALL}")
+    # Separate hostnames and IPs
+    hostnames = []
+    ips = []
+    for entry in result_set:
+        if is_ip(entry):
+            ips.append(entry)
+        else:
+            hostnames.append(entry)
+
+    # Write hostnames
+    host_output_path = os.path.join(result_dir, "ResultHost.txt")
+    with open(host_output_path, "w") as f:
+        for host in hostnames[:num]:
+            print(host)
+            f.write(host + "\n")
+
+    # Write IPs
+    ip_output_path = os.path.join(result_dir, "ResultIP.txt")
+    with open(ip_output_path, "w") as f:
+        for ip in ips[:num]:
+            print(ip)
+            f.write(ip + "\n")
+
+    print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), num)} hostnames to {host_output_path}{Style.RESET_ALL}")
+    print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), num)} IPs to {ip_output_path}{Style.RESET_ALL}")
 
 def reverse_ip_to_domain():
     ip_file = input(f"{Fore.YELLOW}Enter the path to your IP list (e.g., ips.txt): {Style.RESET_ALL}").strip()
