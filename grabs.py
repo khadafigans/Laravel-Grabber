@@ -128,24 +128,28 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
             try:
                 results = api.search(query, page=page)
                 with lock:
-                    for match in results['matches']:
+                    matches = results.get('matches', [])
+                    print(f"\n{Fore.MAGENTA}Fetched page {page} with {len(matches)} matches for query: {query}{Style.RESET_ALL}")
+                    for match in matches:
                         hostnames = match.get('hostnames', [])
                         ip = match.get('ip_str', None)
                         if hostnames:
                             for hostname in hostnames:
-                                if not is_ip(hostname):
+                                if not is_ip(hostname) and hostname not in result_set:
                                     result_set.add(hostname)
-                        elif ip:
+                                    print(f"{Fore.GREEN}Found hostname: {hostname}{Style.RESET_ALL}")
+                        elif ip and ip not in result_set:
                             result_set.add(ip)
+                            print(f"{Fore.GREEN}Found IP: {ip}{Style.RESET_ALL}")
                     progress[0] = len(result_set)
                     percent = int((progress[0] / total) * 100)
                     bar = ('#' * (percent // 2)).ljust(50)
                     print(f"\r{Fore.CYAN}Progress: [{bar}] {percent}% ({progress[0]}/{total}){Style.RESET_ALL}", end="")
                 break
-            except Exception:
-                # Suppress retry messages to keep UI clean
-                time.sleep(2)
+            except Exception as e:
+                # Suppress retry messages but print on final failure
                 attempt += 1
+                time.sleep(2)
         page_queue.task_done()
         time.sleep(1)
 
@@ -194,7 +198,7 @@ def grab_domains():
                     break
 
                 # Build query with date range and optional country and extra filters
-                query = f'{query_base} after:{date_start} before:{date_end}'
+                query = query_base
                 if country:
                     query += f' country:{country}'
                 if extra_filter:
