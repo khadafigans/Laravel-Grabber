@@ -24,7 +24,6 @@ print(banner)
 def is_ip(address):
     return re.match(r"^\d{1,3}(\.\d{1,3}){3}$", address) is not None
 
-# Broader set of queries to catch more Laravel debug/error pages
 LARAVEL_QUERIES = [
     'http.title:"Whoops! There was an error."',
     'http.html:"Whoops, looks like something went wrong."',
@@ -42,25 +41,30 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
             page = page_queue.get_nowait()
         except queue.Empty:
             break
-        try:
-            results = api.search(query, page=page)
-            with lock:
-                for match in results['matches']:
-                    hostnames = match.get('hostnames', [])
-                    ip = match.get('ip_str', None)
-                    # Add hostnames if present, else add IP
-                    if hostnames:
-                        for hostname in hostnames:
-                            if not is_ip(hostname):
-                                result_set.add(hostname)
-                    elif ip:
-                        result_set.add(ip)
-                progress[0] = len(result_set)
-                percent = int((progress[0] / total) * 100)
-                bar = ('#' * (percent // 2)).ljust(50)
-                print(f"\r{Fore.CYAN}Progress: [{bar}] {percent}% ({progress[0]}/{total}){Style.RESET_ALL}", end="")
-        except Exception as e:
-            print(f"{Fore.RED}Shodan error on page {page}: {e}{Style.RESET_ALL}")
+        for attempt in range(3):
+            try:
+                results = api.search(query, page=page)
+                with lock:
+                    for match in results['matches']:
+                        hostnames = match.get('hostnames', [])
+                        ip = match.get('ip_str', None)
+                        if hostnames:
+                            for hostname in hostnames:
+                                if not is_ip(hostname):
+                                    result_set.add(hostname)
+                        elif ip:
+                            result_set.add(ip)
+                    progress[0] = len(result_set)
+                    percent = int((progress[0] / total) * 100)
+                    bar = ('#' * (percent // 2)).ljust(50)
+                    print(f"\r{Fore.CYAN}Progress: [{bar}] {percent}% ({progress[0]}/{total}){Style.RESET_ALL}", end="")
+                break
+            except Exception as e:
+                if attempt < 2:
+                    print(f"{Fore.YELLOW}Retrying Shodan page {page} due to error: {e}{Style.RESET_ALL}")
+                    time.sleep(2)
+                else:
+                    print(f"{Fore.RED}Shodan error on page {page}: {e}{Style.RESET_ALL}")
         page_queue.task_done()
         time.sleep(1)  # Respect Shodan's rate limit
 
@@ -70,26 +74,29 @@ def domain_to_ip_worker(domain_queue, result_list, lock):
             domain = domain_queue.get_nowait()
         except queue.Empty:
             break
-        try:
-            ip = socket.gethostbyname(domain)
-            with lock:
-                result_list.append(ip)
-        except Exception:
-            pass  # Skip domains that can't be resolved
+        for attempt in range(3):
+            try:
+                ip = socket.gethostbyname(domain)
+                with lock:
+                    result_list.append(ip)
+                break
+            except Exception:
+                if attempt == 2:
+                    pass  # Skip domains that can't be resolved
 
 def grab_domains():
     while True:
         try:
-            num = int(input(f"{Fore.YELLOW}How much sites you want to grab (10-10000): {Style.RESET_ALL}"))
-            if 10 <= num <= 10000:
+            num = int(input(f"{Fore.YELLOW}How much sites you want to grab (10-1000000): {Style.RESET_ALL}"))
+            if 10 <= num <= 1000000:
                 break
             else:
-                print(f"{Fore.RED}Please enter a number between 10 and 10000.{Style.RESET_ALL}")
+                print(f"{Fore.RED}Please enter a number between 10 and 1000000.{Style.RESET_ALL}")
         except ValueError:
             print(f"{Fore.RED}Invalid input. Please enter a number.{Style.RESET_ALL}")
 
     print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Thread count is set to 1 for compliance.{Style.RESET_ALL}")
-    num_threads = 1  # Force to 1 to avoid rate limit
+    num_threads = 1
 
     print(f"{Fore.LIGHTGREEN_EX}Searching Shodan for Laravel debug pages with multiple queries...{Style.RESET_ALL}")
 
@@ -97,10 +104,10 @@ def grab_domains():
     lock = threading.Lock()
     progress = [0]
 
-    # For each query, fetch enough pages to try to reach the target
     for query in LARAVEL_QUERIES:
         page_queue = queue.Queue()
-        # Fetch more pages per query to maximize coverage
+        # Each Shodan page returns up to 100 results
+        # Add a buffer of 10 extra pages per query to maximize coverage
         pages_needed = (num // 100) + 10
         for i in range(1, pages_needed + 1):
             page_queue.put(i)
@@ -119,7 +126,6 @@ def grab_domains():
     result_dir = "ResultGrab"
     os.makedirs(result_dir, exist_ok=True)
 
-    # Separate hostnames and IPs
     hostnames = []
     ips = []
     for entry in result_set:
@@ -128,14 +134,12 @@ def grab_domains():
         else:
             hostnames.append(entry)
 
-    # Write hostnames
     host_output_path = os.path.join(result_dir, "ResultHost.txt")
     with open(host_output_path, "w") as f:
         for host in hostnames[:num]:
             print(host)
             f.write(host + "\n")
 
-    # Write IPs
     ip_output_path = os.path.join(result_dir, "ResultIP.txt")
     with open(ip_output_path, "w") as f:
         for ip in ips[:num]:
@@ -144,6 +148,21 @@ def grab_domains():
 
     print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), num)} hostnames to {host_output_path}{Style.RESET_ALL}")
     print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), num)} IPs to {ip_output_path}{Style.RESET_ALL}")
+
+def shodan_host_lookup(api, ip, retries=3):
+    for attempt in range(retries):
+        try:
+            return api.host(ip)
+        except shodan.APIError as e:
+            print(f"Shodan API error: {e}")
+            if "rate limit" in str(e).lower():
+                time.sleep(2)
+            else:
+                break
+        except Exception as e:
+            print(f"Error on attempt {attempt+1} for {ip}: {e}")
+            time.sleep(2)
+    return None
 
 def reverse_ip_to_domain():
     ip_file = input(f"{Fore.YELLOW}Enter the path to your IP list (e.g., ips.txt): {Style.RESET_ALL}").strip()
@@ -165,34 +184,34 @@ def reverse_ip_to_domain():
     rdns_results = set()
     lock = threading.Lock()
 
-    # Shodan lookups (single-threaded, rate-limited)
     api = shodan.Shodan(SHODAN_API_KEY)
     for idx, ip in enumerate(ips, 1):
-        try:
-            result = api.host(ip)
+        result = shodan_host_lookup(api, ip)
+        if result:
             hostnames = result.get('hostnames', [])
             with lock:
                 for h in hostnames:
                     if h and not is_ip(h):
                         shodan_results.add(h)
             print(f"{Fore.CYAN}[Shodan] {ip}: {hostnames if hostnames else 'No hostnames'} ({idx}/{len(ips)}){Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}[Shodan] {ip}: {e} ({idx}/{len(ips)}){Style.RESET_ALL}")
-        time.sleep(1)  # Respect Shodan's rate limit
+        else:
+            print(f"{Fore.RED}[Shodan] {ip}: No result or error ({idx}/{len(ips)}){Style.RESET_ALL}")
+        time.sleep(1)
 
-    # Reverse DNS lookups (multi-threaded)
     def rdns_worker(ip_list):
         for ip in ip_list:
-            try:
-                rdns = socket.gethostbyaddr(ip)[0]
-                with lock:
-                    if rdns and not is_ip(rdns):
-                        rdns_results.add(rdns)
-                print(f"{Fore.LIGHTGREEN_EX}[RDNS] {ip}: {rdns}{Style.RESET_ALL}")
-            except Exception as e:
-                print(f"{Fore.YELLOW}[RDNS] {ip}: No PTR record or error{Style.RESET_ALL}")
+            for attempt in range(3):
+                try:
+                    rdns = socket.gethostbyaddr(ip)[0]
+                    with lock:
+                        if rdns and not is_ip(rdns):
+                            rdns_results.add(rdns)
+                    print(f"{Fore.LIGHTGREEN_EX}[RDNS] {ip}: {rdns}{Style.RESET_ALL}")
+                    break
+                except Exception:
+                    if attempt == 2:
+                        print(f"{Fore.YELLOW}[RDNS] {ip}: No PTR record or error{Style.RESET_ALL}")
 
-    # Split IPs for threading
     thread_count = 10
     ip_chunks = [ips[i::thread_count] for i in range(thread_count)]
     threads = []
@@ -207,7 +226,6 @@ def reverse_ip_to_domain():
     os.makedirs(result_dir, exist_ok=True)
     output_path = os.path.join(result_dir, "Reverse.txt")
 
-    # Only keep results that are hostnames (not IPs)
     all_domains = sorted({h for h in (shodan_results | rdns_results) if not is_ip(h)})
 
     with open(output_path, "w") as f:
