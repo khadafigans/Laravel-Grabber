@@ -11,6 +11,9 @@ Installation :
  - How To Use ?
    
                python grabs.py
+
+<h2>Screenshots</h2>
+<img src="https://i.imgur.com/XMnJ44Y.png" style="max-width:100%;">
                
 ## ✨ Features:
 - ✅ **Live domain scraping**
