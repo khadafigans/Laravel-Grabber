@@ -86,7 +86,7 @@ def setup_proxy_for_request(proxy_url):
 
 def ask_proxy():
     global proxy_list
-    use_proxy = input(f"{Fore.YELLOW}With Proxy or No Proxy (1 If Yes, 2 If No): {Style.RESET_ALL}").strip()
+    use_proxy = input(f"{Fore.YELLOW}With Proxy or No Proxy (1=Yes, 2=No): {Style.RESET_ALL}").strip()
     if use_proxy == "1":
         if not socks:
             print(f"{Fore.RED}PySocks is required for proxy support. Install with: pip install pysocks requests[socks]{Style.RESET_ALL}")
@@ -190,7 +190,7 @@ def grab_domains():
         start_page = 1
 
     country_input = input(f"{Fore.YELLOW}Enter country codes, e.g.: (US,JP,DE) or press Enter to skip: {Style.RESET_ALL}").strip()
-   country_list = [c.strip().upper() for c in country_input.split(",") if c.strip()] if country_input else [None]
+    country_list = [c.strip().upper() for c in country_input.split(",") if c.strip()] if country_input else [None]
 
     print(f"{Fore.YELLOW}Shodan API allows only 1 request per second. Thread count is set to 1 for compliance.{Style.RESET_ALL}")
     num_threads = 1
@@ -417,7 +417,7 @@ def main():
     ask_proxy()
 
     print(f"{Fore.YELLOW}Choose between (1-3){Style.RESET_ALL}")
-    print(ff"{Fore.YELLOW}1. Grab Domain/Hostname{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}1. Grab Domain/Hostname{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}2. Reverse IP to Domain{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}3. Domain to IP{Style.RESET_ALL}")
 
