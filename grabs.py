@@ -147,7 +147,6 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
                     print(f"\r{Fore.CYAN}Progress: [{bar}] {percent}% ({progress[0]}/{total}){Style.RESET_ALL}", end="")
                 break
             except Exception as e:
-                # Suppress retry messages but print on final failure
                 attempt += 1
                 time.sleep(2)
         page_queue.task_done()
@@ -186,75 +185,106 @@ def grab_domains():
     lock = threading.Lock()
     progress = [0]
 
-    for country in country_list:
-        print(f"{Fore.LIGHTGREEN_EX}Starting search for Laravel debug pages{f' in {country}' if country else ''}...{Style.RESET_ALL}")
+    try:
+        for country in country_list:
+            print(f"{Fore.LIGHTGREEN_EX}Starting search for Laravel debug pages{f' in {country}' if country else ''}...{Style.RESET_ALL}")
 
-        for date_start, date_end in date_ranges:
-            if len(result_set) >= total_num:
-                break  # reached desired total
-
-            for query_base in LARAVEL_QUERIES:
+            for date_start, date_end in date_ranges:
                 if len(result_set) >= total_num:
-                    break
+                    break  # reached desired total
 
-                # Build query with date range and optional country and extra filters
-                query = query_base
-                if country:
-                    query += f' country:{country}'
-                if extra_filter:
-                    query += f' {extra_filter}'
+                for query_base in LARAVEL_QUERIES:
+                    if len(result_set) >= total_num:
+                        break
 
-                pages_needed = math.ceil((total_num - len(result_set)) / 100)
-                pages_needed = min(pages_needed, MAX_PAGES)
+                    # Build query with date range and optional country and extra filters
+                    query = query_base
+                    if country:
+                        query += f' country:{country}'
+                    if extra_filter:
+                        query += f' {extra_filter}'
 
-                page_numbers = list(range(1, pages_needed + 1))
+                    pages_needed = math.ceil((total_num - len(result_set)) / 100)
+                    pages_needed = min(pages_needed, MAX_PAGES)
 
-                print(f"{Fore.CYAN}DEBUG: Query: {query}{Style.RESET_ALL}")
-                print(f"{Fore.CYAN}DEBUG: Pages to query: {page_numbers}{Style.RESET_ALL}")
+                    page_numbers = list(range(1, pages_needed + 1))
 
-                page_queue = queue.Queue()
-                for p in page_numbers:
-                    page_queue.put(p)
+                    print(f"{Fore.CYAN}DEBUG: Query: {query}{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}DEBUG: Pages to query: {page_numbers}{Style.RESET_ALL}")
 
-                threads =                threads = []
-                for _ in range(num_threads):
-                    t = threading.Thread(target=shodan_search_worker, args=(SHODAN_API_KEY, query, page_queue, result_set, lock, total_num, progress))
-                    t.start()
-                    threads.append(t)
+                    page_queue = queue.Queue()
+                    for p in page_numbers:
+                        page_queue.put(p)
 
-                for t in threads:
-                    t.join()
+                    threads = []
+                    for _ in range(num_threads):
+                        t = threading.Thread(target=shodan_search_worker, args=(SHODAN_API_KEY, query, page_queue, result_set, lock, total_num, progress))
+                        t.start()
+                        threads.append(t)
 
-                if len(result_set) >= total_num:
-                    break
+                    for t in threads:
+                        t.join()
 
-        print(f"\n{Fore.LIGHTGREEN_EX}Search complete for {country if country else 'ALL'}. Total results collected: {len(result_set)}{Style.RESET_ALL}")
+                    if len(result_set) >= total_num:
+                        break
 
-        result_dir = f"ResultGrab/{country if country else 'ALL'}"
-        os.makedirs(result_dir, exist_ok=True)
+            print(f"\n{Fore.LIGHTGREEN_EX}Search complete for {country if country else 'ALL'}. Total results collected: {len(result_set)}{Style.RESET_ALL}")
 
-        hostnames = []
-        ips = []
-        for entry in result_set:
-            if is_ip(entry):
-                ips.append(entry)
-            else:
-                hostnames.append(entry)
+            # Save results here
+            result_dir = f"ResultGrab/{country if country else 'ALL'}"
+            os.makedirs(result_dir, exist_ok=True)
 
-        host_output_path = os.path.join(result_dir, "ResultHost.txt")
-        with open(host_output_path, "w") as f:
-            for host in hostnames[:total_num]:
-                print(host)
-                f.write(host + "\n")
+            hostnames = []
+            ips = []
+            for entry in result_set:
+                if is_ip(entry):
+                    ips.append(entry)
+                else:
+                    hostnames.append(entry)
 
-        ip_output_path = os.path.join(result_dir, "ResultIP.txt")
-        with open(ip_output_path, "w") as f:
-            for ip in ips[:total_num]:
-                print(ip)
-                f.write(ip + "\n")
+            host_output_path = os.path.join(result_dir, "ResultHost.txt")
+            with open(host_output_path, "w") as f:
+                for host in hostnames[:total_num]:
+                    print(host)
+                    f.write(host + "\n")
 
-        print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), total_num)} hostnames to {host_output_path}{Style.RESET_ALL}")
-        print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), total_num)} IPs to {ip_output_path}{Style.RESET_ALL}")
+            ip_output_path = os.path.join(result_dir, "ResultIP.txt")
+            with open(ip_output_path, "w") as f:
+                for ip in ips[:total_num]:
+                    print(ip)
+                    f.write(ip + "\n")
+
+            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), total_num)} hostnames to {host_output_path}{Style.RESET_ALL}")
+            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), total_num)} IPs to {ip_output_path}{Style.RESET_ALL}")
+
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}Interrupted by user! Saving results so far...{Style.RESET_ALL}")
+        for country in country_list:
+            result_dir = f"ResultGrab/{country if country else 'ALL'}"
+            os.makedirs(result_dir, exist_ok=True)
+
+            hostnames = []
+            ips = []
+            for entry in result_set:
+                if is_ip(entry):
+                    ips.append(entry)
+                else:
+                    hostnames.append(entry)
+
+            host_output_path = os.path.join(result_dir, "ResultHost.txt")
+            with open(host_output_path, "w") as f:
+                for host in hostnames[:total_num]:
+                    f.write(host + "\n")
+
+            ip_output_path = os.path.join(result_dir, "ResultIP.txt")
+            with open(ip_output_path, "w") as f:
+                for ip in ips[:total_num]:
+                    f.write(ip + "\n")
+
+            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), total_num)} hostnames to {host_output_path}{Style.RESET_ALL}")
+            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), total_num)} IPs to {ip_output_path}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Exiting...{Style.RESET_ALL}")
+        sys.exit(0)
 
 def main():
     ask_proxy()
