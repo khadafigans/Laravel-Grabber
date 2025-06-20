@@ -42,7 +42,28 @@ LARAVEL_QUERIES = [
     'http.html:"Whoops\\Exception\\ErrorException"',
     'http.html:"Whoops\\Run"',
     'http.html:"laravel.log"',
-    'http.html:"laravel"'
+    'http.html:"laravel"',
+    'http.html:"laravel_session"',
+    'http.html:"APP_KEY"',
+    'http.html:"APP_ENV"',
+    'http.html:"DB_HOST"',
+    'http.html:"DB_DATABASE"',
+    'http.html:"DB_USERNAME"',
+    'http.html:"DB_PASSWORD"',
+    'http.html:"APP_DEBUG"',
+    'http.html:"APP_URL"',
+    'http.html:"APP_NAME"',
+    'http.html:"APP_ENV=production"',
+    'http.html:"APP_ENV=local"',
+    'http.html:"APP_ENV=development"',
+    'http.html:"APP_ENV=staging"',
+    'http.html:"APP_ENV=testing"',
+    'http.html:"laravel.log" port:80',
+    'http.html:"laravel.log" port:443',
+    'http.html:"laravel.log" port:8080',
+    'http.html:"laravel.log" port:8000',
+    'http.html:"laravel.log" port:8888',
+    'http.html:"laravel.log" port:8443',
 ]
 
 def get_random_proxy():
@@ -65,21 +86,6 @@ def setup_proxy_for_request(proxy_url):
     os.environ['HTTP_PROXY'] = proxy_url
     os.environ['HTTPS_PROXY'] = proxy_url
     os.environ['SHODAN_PROXY'] = proxy_url
-    if socks:
-        m = re.match(r'(socks5|http|https)://([\w\.-]+):(\d+)', proxy_url)
-        if not m:
-            print(f"{Fore.RED}Invalid proxy format. Use socks5://host:port, http://host:port, or https://host:port{Style.RESET_ALL}")
-            sys.exit(1)
-        proxy_type = m.group(1)
-        host = m.group(2)
-        port = int(m.group(3))
-        if proxy_type == "socks5":
-            socks.set_default_proxy(socks.SOCKS5, host, port)
-        elif proxy_type == "http":
-            socks.set_default_proxy(socks.HTTP, host, port)
-        elif proxy_type == "https":
-            socks.set_default_proxy(socks.HTTP, host, port)
-        socket.socket = socks.socksocket
 
 def ask_proxy():
     global proxy_list
@@ -113,7 +119,7 @@ def generate_date_ranges(start_date, end_date, delta_days=30):
         current_start = current_end + datetime.timedelta(days=1)
     return ranges
 
-def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, progress):
+def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, progress, host_output_path, ip_output_path):
     while True:
         try:
             page = page_queue.get_nowait()
@@ -138,9 +144,13 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
                                 if not is_ip(hostname) and hostname not in result_set:
                                     result_set.add(hostname)
                                     print(f"{Fore.GREEN}Found hostname: {hostname}{Style.RESET_ALL}")
+                                    with open(host_output_path, "a") as f:
+                                        f.write(hostname + "\n")
                         elif ip and ip not in result_set:
                             result_set.add(ip)
                             print(f"{Fore.GREEN}Found IP: {ip}{Style.RESET_ALL}")
+                            with open(ip_output_path, "a") as f:
+                                f.write(ip + "\n")
                     progress[0] = len(result_set)
                     percent = int((progress[0] / total) * 100)
                     bar = ('#' * (percent // 2)).ljust(50)
@@ -181,32 +191,45 @@ def grab_domains():
 
     MAX_PAGES = 10  # max pages per query (1000 results)
 
-    result_set = set()
-    lock = threading.Lock()
-    progress = [0]
+    # Split the quota among countries
+    per_country_quota = total_num // len(country_list)
+    remainder = total_num % len(country_list)
 
     try:
-        for country in country_list:
-            print(f"{Fore.LIGHTGREEN_EX}Starting search for Laravel debug pages{f' in {country}' if country else ''}...{Style.RESET_ALL}")
+        for idx, country in enumerate(country_list):
+            this_country_quota = per_country_quota + (1 if idx < remainder else 0)
+            if this_country_quota == 0:
+                continue
+
+            print(f"{Fore.LIGHTGREEN_EX}Starting search for Laravel debug pages in {country if country else 'ALL'} (quota: {this_country_quota})...{Style.RESET_ALL}")
+
+            result_dir = f"ResultGrab/{country if country else 'ALL'}"
+            os.makedirs(result_dir, exist_ok=True)
+            host_output_path = os.path.join(result_dir, "ResultHost.txt")
+            ip_output_path = os.path.join(result_dir, "ResultIP.txt")
+
+            open(host_output_path, "w").close()
+            open(ip_output_path, "w").close()
+
+            result_set = set()
+            lock = threading.Lock()
+            progress = [0]
 
             for date_start, date_end in date_ranges:
-                if len(result_set) >= total_num:
-                    break  # reached desired total
+                if len(result_set) >= this_country_quota:
+                    break
 
                 for query_base in LARAVEL_QUERIES:
-                    if len(result_set) >= total_num:
+                    if len(result_set) >= this_country_quota:
                         break
 
-                    # Build query with date range and optional country and extra filters
                     query = query_base
                     if country:
                         query += f' country:{country}'
                     if extra_filter:
                         query += f' {extra_filter}'
 
-                    pages_needed = math.ceil((total_num - len(result_set)) / 100)
-                    pages_needed = min(pages_needed, MAX_PAGES)
-
+                    pages_needed = min(math.ceil((this_country_quota - len(result_set)) / 100), MAX_PAGES)
                     page_numbers = list(range(1, pages_needed + 1))
 
                     print(f"{Fore.CYAN}DEBUG: Query: {query}{Style.RESET_ALL}")
@@ -218,88 +241,94 @@ def grab_domains():
 
                     threads = []
                     for _ in range(num_threads):
-                        t = threading.Thread(target=shodan_search_worker, args=(SHODAN_API_KEY, query, page_queue, result_set, lock, total_num, progress))
+                        t = threading.Thread(
+                            target=shodan_search_worker,
+                            args=(
+                                SHODAN_API_KEY, query, page_queue, result_set, lock,
+                                this_country_quota, progress, host_output_path, ip_output_path
+                            )
+                        )
                         t.start()
                         threads.append(t)
 
                     for t in threads:
                         t.join()
 
-                    if len(result_set) >= total_num:
+                    if len(result_set) >= this_country_quota:
                         break
 
             print(f"\n{Fore.LIGHTGREEN_EX}Search complete for {country if country else 'ALL'}. Total results collected: {len(result_set)}{Style.RESET_ALL}")
-
-            # Save results here
-            result_dir = f"ResultGrab/{country if country else 'ALL'}"
-            os.makedirs(result_dir, exist_ok=True)
-
-            hostnames = []
-            ips = []
-            for entry in result_set:
-                if is_ip(entry):
-                    ips.append(entry)
-                else:
-                    hostnames.append(entry)
-
-            host_output_path = os.path.join(result_dir, "ResultHost.txt")
-            with open(host_output_path, "w") as f:
-                for host in hostnames[:total_num]:
-                    print(host)
-                    f.write(host + "\n")
-
-            ip_output_path = os.path.join(result_dir, "ResultIP.txt")
-            with open(ip_output_path, "w") as f:
-                for ip in ips[:total_num]:
-                    print(ip)
-                    f.write(ip + "\n")
-
-            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), total_num)} hostnames to {host_output_path}{Style.RESET_ALL}")
-            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), total_num)} IPs to {ip_output_path}{Style.RESET_ALL}")
+            print(f"{Fore.LIGHTGREEN_EX}Saved hostnames to {host_output_path}{Style.RESET_ALL}")
+            print(f"{Fore.LIGHTGREEN_EX}Saved IPs to {ip_output_path}{Style.RESET_ALL}")
 
     except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}Interrupted by user! Saving results so far...{Style.RESET_ALL}")
-        for country in country_list:
-            result_dir = f"ResultGrab/{country if country else 'ALL'}"
-            os.makedirs(result_dir, exist_ok=True)
-
-            hostnames = []
-            ips = []
-            for entry in result_set:
-                if is_ip(entry):
-                    ips.append(entry)
-                else:
-                    hostnames.append(entry)
-
-            host_output_path = os.path.join(result_dir, "ResultHost.txt")
-            with open(host_output_path, "w") as f:
-                for host in hostnames[:total_num]:
-                    f.write(host + "\n")
-
-            ip_output_path = os.path.join(result_dir, "ResultIP.txt")
-            with open(ip_output_path, "w") as f:
-                for ip in ips[:total_num]:
-                    f.write(ip + "\n")
-
-            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(hostnames), total_num)} hostnames to {host_output_path}{Style.RESET_ALL}")
-            print(f"{Fore.LIGHTGREEN_EX}Saved {min(len(ips), total_num)} IPs to {ip_output_path}{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Exiting...{Style.RESET_ALL}")
+        print(f"\n{Fore.YELLOW}Interrupted by user! Exiting...{Style.RESET_ALL}")
         sys.exit(0)
+
+def domain_to_ip():
+    filename = input(f"{Fore.YELLOW}Enter the filename containing domains (one per line): {Style.RESET_ALL}").strip()
+    result_dir = "ResultDomainToIP"
+    os.makedirs(result_dir, exist_ok=True)
+    output_file = os.path.join(result_dir, "DomainToIP.txt")
+    if not os.path.isfile(filename):
+        print(f"{Fore.RED}File not found: {filename}{Style.RESET_ALL}")
+        return
+    with open(filename, "r") as f, open(output_file, "w") as out:
+        for line in f:
+            domain = line.strip()
+            if not domain:
+                continue
+            try:
+                ip = socket.gethostbyname(domain)
+                print(f"{Fore.GREEN}{domain} -> {ip}{Style.RESET_ALL}")
+                out.write(f"{ip}\n")
+            except Exception as e:
+                print(f"{Fore.RED}Failed to resolve {domain}: {e}{Style.RESET_ALL}")
+    print(f"{Fore.LIGHTGREEN_EX}Results saved to {output_file}{Style.RESET_ALL}")
+
+def reverse_ip_to_domain():
+    filename = input(f"{Fore.YELLOW}Enter the filename containing IPs (one per line): {Style.RESET_ALL}").strip()
+    result_dir = "ResultReverse"
+    os.makedirs(result_dir, exist_ok=True)
+    output_file = os.path.join(result_dir, "Resultreverse.txt")
+    api = shodan.Shodan(SHODAN_API_KEY)
+    if not os.path.isfile(filename):
+        print(f"{Fore.RED}File not found: {filename}{Style.RESET_ALL}")
+        return
+    with open(filename, "r") as f, open(output_file, "w") as out:
+        for line in f:
+            ip = line.strip()
+            if not ip:
+                continue
+            try:
+                host_info = api.host(ip)
+                hostnames = set(host_info.get("hostnames", []))
+                domains = set(host_info.get("domains", []))
+                all_domains = hostnames | domains
+                if all_domains:
+                    print(f"{Fore.GREEN}{ip} -> {len(all_domains)} domains/hostnames found{Style.RESET_ALL}")
+                    for d in all_domains:
+                        out.write(f"{d}\n")
+                else:
+                    print(f"{Fore.YELLOW}{ip} -> No domains/hostnames found{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}Shodan error for {ip}: {e}{Style.RESET_ALL}")
+    print(f"{Fore.LIGHTGREEN_EX}Results saved to {output_file}{Style.RESET_ALL}")
 
 def main():
     ask_proxy()
     while True:
         print(f"{Fore.YELLOW}Choose between (1-3){Style.RESET_ALL}")
         print(f"{Fore.YELLOW}1. Grab Domain/Hostname{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}2. Reverse IP to Domain (Not implemented){Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}3. Domain to IP (Not implemented){Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}2. Reverse IP to Domain{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}3. Domain to IP{Style.RESET_ALL}")
         choice = input(f"{Fore.YELLOW}{Style.BRIGHT}Enter your choice (1, 2, or 3): {Style.RESET_ALL}")
         if choice == "1":
             grab_domains()
         elif choice == "2":
-            print(f"{Fore.RED}Reverse IP to Domain not implemented.{Style.RESET_ALL}")
+            reverse_ip_to_domain()
         elif choice == "3":
-            print(f"{Fore.RED}Domain to IP not implemented.{Style.RESET_ALL}")
+            domain_to_ip()
         else:
             print(f"{Fore.RED}Invalid choice. Please enter 1, 2, or 3.{Style.RESET_ALL}")
 
