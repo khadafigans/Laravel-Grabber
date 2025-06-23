@@ -15,7 +15,7 @@ try:
 except ImportError:
     socks = None
 
-SHODAN_API_KEY = "YOUR_SHODAN_API_KEY"  # <-- Put your Shodan API key here
+SHODAN_API_KEY = "YOUR_SHODAN_APIKEY"  # <-- Put your Shodan API key here
 
 init(autoreset=True)
 LIME = Fore.LIGHTGREEN_EX
@@ -143,11 +143,13 @@ def shodan_search_worker(api_key, query, page_queue, result_set, lock, total, pr
                             for hostname in hostnames:
                                 if not is_ip(hostname) and hostname not in result_set:
                                     result_set.add(hostname)
+                                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     print(f"{Fore.GREEN}Found hostname: {hostname}{Style.RESET_ALL}")
                                     with open(host_output_path, "a") as f:
                                         f.write(hostname + "\n")
                         elif ip and ip not in result_set:
                             result_set.add(ip)
+                            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             print(f"{Fore.GREEN}Found IP: {ip}{Style.RESET_ALL}")
                             with open(ip_output_path, "a") as f:
                                 f.write(ip + "\n")
@@ -175,7 +177,7 @@ def grab_domains():
         except ValueError:
             print(f"{Fore.RED}Invalid input. Please enter a number.{Style.RESET_ALL}")
 
-    extra_filter = input(f"{Fore.YELLOW}Enter any extra filters (e.g., country:US) or press Enter to skip: {Style.RESET_ALL}").strip()
+    extra_filter = input(f"{Fore.YELLOW}Enter any extra filters (e.g., hostname:.id) or press Enter to skip: {Style.RESET_ALL}").strip()
 
     # Define date range for splitting queries (last 3 years)
     end_date = datetime.date.today()
@@ -184,20 +186,25 @@ def grab_domains():
     date_ranges = generate_date_ranges(start_date, end_date, delta_days=30)  # monthly ranges
 
     country_input = input(f"{Fore.YELLOW}Enter country codes separated by commas (e.g., US,JP,DE) or press Enter to skip: {Style.RESET_ALL}").strip()
-    country_list = [c.strip().upper() for c in country_input.split(",") if c.strip()] if country_input else [None]
+    country_list = [c.strip().upper() for c in country_input.split(",") if c.strip()] if country_input else []
 
     print(f"{Fore.YELLOW}Shodan API allows 1 request per second. Thread count set to 1 for compliance.{Style.RESET_ALL}")
     num_threads = 1
 
     MAX_PAGES = 10  # max pages per query (1000 results)
 
-    # Split the quota among countries
-    per_country_quota = total_num // len(country_list)
-    remainder = total_num % len(country_list)
+    # If no countries are specified, treat it as a global search (no country filter)
+    if not country_list:
+        country_list = [None]
+        per_country_quota = total_num
+    else:
+        # Split the quota among countries
+        per_country_quota = total_num // len(country_list)
+        remainder = total_num % len(country_list)
 
     try:
         for idx, country in enumerate(country_list):
-            this_country_quota = per_country_quota + (1 if idx < remainder else 0)
+            this_country_quota = per_country_quota + (1 if idx < remainder else 0) if country_list != [None] else per_country_quota
             if this_country_quota == 0:
                 continue
 
@@ -205,8 +212,10 @@ def grab_domains():
 
             result_dir = f"ResultGrab/{country if country else 'ALL'}"
             os.makedirs(result_dir, exist_ok=True)
-            host_output_path = os.path.join(result_dir, "ResultHost.txt")
-            ip_output_path = os.path.join(result_dir, "ResultIP.txt")
+            now_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            host_output_path = os.path.join(result_dir, f"ResultHost_{now_str}.txt")
+            ip_output_path = os.path.join(result_dir, f"ResultIP_{now_str}.txt")
+
 
             open(host_output_path, "w").close()
             open(ip_output_path, "w").close()
@@ -269,7 +278,9 @@ def domain_to_ip():
     filename = input(f"{Fore.YELLOW}Enter the filename containing domains (one per line): {Style.RESET_ALL}").strip()
     result_dir = "ResultDomainToIP"
     os.makedirs(result_dir, exist_ok=True)
-    output_file = os.path.join(result_dir, "DomainToIP.txt")
+    now_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_file = os.path.join(result_dir, f"DomainToIP_{now_str}.txt")
+
     if not os.path.isfile(filename):
         print(f"{Fore.RED}File not found: {filename}{Style.RESET_ALL}")
         return
@@ -280,6 +291,7 @@ def domain_to_ip():
                 continue
             try:
                 ip = socket.gethostbyname(domain)
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 print(f"{Fore.GREEN}{domain} -> {ip}{Style.RESET_ALL}")
                 out.write(f"{ip}\n")
             except Exception as e:
@@ -290,7 +302,8 @@ def reverse_ip_to_domain():
     filename = input(f"{Fore.YELLOW}Enter the filename containing IPs (one per line): {Style.RESET_ALL}").strip()
     result_dir = "ResultReverse"
     os.makedirs(result_dir, exist_ok=True)
-    output_file = os.path.join(result_dir, "Resultreverse.txt")
+    now_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_file = os.path.join(result_dir, f"Resultreverse_{now_str}.txt")
     api = shodan.Shodan(SHODAN_API_KEY)
     if not os.path.isfile(filename):
         print(f"{Fore.RED}File not found: {filename}{Style.RESET_ALL}")
@@ -306,6 +319,7 @@ def reverse_ip_to_domain():
                 domains = set(host_info.get("domains", []))
                 all_domains = hostnames | domains
                 if all_domains:
+                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     print(f"{Fore.GREEN}{ip} -> {len(all_domains)} domains/hostnames found{Style.RESET_ALL}")
                     for d in all_domains:
                         out.write(f"{d}\n")
