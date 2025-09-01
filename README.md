@@ -51,4 +51,8 @@ You Want Ask About All My Tools Private Add Me On :
 
            This script was made for an educational purposes only, any illegal activites will have nothing to do with me
 
+👨‍💻 Author: Bob Marley
+Buy me a Coffe :
+₿ BTC: 17sbbeTzDMP4aMELVbLW78Rcsj4CDRBiZh
+
 <br>©2025 Bob Marley
