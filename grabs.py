@@ -15,7 +15,7 @@ try:
 except ImportError:
     socks = None
 
-SHODAN_API_KEY = "YOUR_SHODAN_APIKEY"  # <-- Put your Shodan API key here
+SHODAN_API_KEY = "YOUR_SHODAN_API_KEY"  # <-- Put your Shodan API key here
 
 init(autoreset=True)
 LIME = Fore.LIGHTGREEN_EX
