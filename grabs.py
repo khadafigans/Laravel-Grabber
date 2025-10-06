@@ -64,6 +64,63 @@ LARAVEL_QUERIES = [
     'http.html:"laravel.log" port:8000',
     'http.html:"laravel.log" port:8888',
     'http.html:"laravel.log" port:8443',
+    'http.html:"PHP Fatal error"',
+    'http.html:"PHP Parse error"',
+    'http.html:"PHP Warning"',
+    'http.html:"PHP Notice"',
+    'http.html:"Uncaught Exception"',
+    'http.html:"Stack trace"',
+    'http.html:"in /var/www/"',
+    'http.html:"in /home/"',
+    'http.html:"in C:\\xampp\\htdocs"',
+    'http.html:"in C:\\wamp\\www"',
+    'http.html:"in C:\\inetpub\\wwwroot"',
+    'http.html:"APP_KEY="',
+    'http.html:"DB_PASSWORD="',
+    'http.html:"MAIL_PASSWORD="',
+    'http.html:"REDIS_PASSWORD="',
+    'http.html:"AWS_SECRET_ACCESS_KEY="',
+    'http.html:"STRIPE_SECRET="',
+    'http.html:"MAILGUN_SECRET="',
+    'http.html:"TWILIO_AUTH_TOKEN="',
+    'http.html:"composer.json"',
+    'http.html:"composer.lock"',
+    'http.html:"vendor/autoload.php"',
+    'http.html:"autoload_real.php"',
+    'http.html:"autoload_static.php"',
+    'http.html:"phpinfo()"',
+    'http.title:"phpinfo()"',
+    'http.html:"Configuration File (php.ini) Path"',
+    'http.html:"Loaded Configuration File"',
+    'http.html:"Exception in thread"',
+    'http.html:"Traceback (most recent call last)"',
+    'http.html:"at org."',
+    'http.html:"at sun."',
+    'http.html:"at java."',
+    'http.html:"at com."',
+    'http.html:".log"',
+    'http.html:".env"',
+    'http.html:".git/config"',
+    'http.html:".svn/entries"',
+    'http.html:"backup"',
+    'http.html:"bak"',
+    'http.html:"~"',
+    'http.html:".old"',
+    'http.html:".tar.gz"',
+    'http.html:".zip"',
+    'http.title:"Laravel Nova"',
+    'http.title:"Admin Panel"',
+    'http.title:"Dashboard"',
+    'http.title:"phpMyAdmin"',
+    'http.title:"Admin Login"',
+    'http.title:"Login - Admin"',
+    'http.html:"storage/logs"',
+    'http.html:"storage/framework"',
+    'http.html:"storage/app"',
+    'http.html:"storage/debugbar"',
+    'http.html:"Debugbar"',
+    'http.html:"php artisan"',
+    'http.html:"Artisan command"'
 ]
 
 def get_random_proxy():
@@ -191,7 +248,7 @@ def grab_domains():
     print(f"{Fore.YELLOW}Shodan API allows 1 request per second. Thread count set to 1 for compliance.{Style.RESET_ALL}")
     num_threads = 1
 
-    MAX_PAGES = 10  # max pages per query (1000 results)
+    MAX_PAGES = 100  # max pages per query (1000 results)
 
     # If no countries are specified, treat it as a global search (no country filter)
     if not country_list:
@@ -239,7 +296,7 @@ def grab_domains():
                         query += f' {extra_filter}'
 
                     pages_needed = min(math.ceil((this_country_quota - len(result_set)) / 100), MAX_PAGES)
-                    page_numbers = list(range(1, pages_needed + 1))
+                    page_numbers = list(range(10, pages_needed + 1))
 
                     print(f"{Fore.CYAN}DEBUG: Query: {query}{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}DEBUG: Pages to query: {page_numbers}{Style.RESET_ALL}")
